@@ -254,7 +254,7 @@ class PLC5CSVExporter:
                     self.log(f"  Analyzing file: {ladder_file.Name}")
                     
                     rung_count = ladder_file.NumberOfRungs()
-                    for rung_idx in range(rung_count - 1):
+                    for rung_idx in range(rung_count):
                         try:
                             rung_ascii = ladder_file.GetRungAsAscii(rung_idx)
                             
@@ -557,7 +557,7 @@ class PLC5CSVExporter:
                         file_number = ladder_file.FileNumber
                         
                         rung_count = ladder_file.NumberOfRungs()
-                        for rung_idx in range(rung_count - 1):
+                        for rung_idx in range(rung_count):
                             try:
                                 rung_ascii = ladder_file.GetRungAsAscii(rung_idx)
                                 writer.writerow([file_name, file_number, rung_idx, rung_ascii])

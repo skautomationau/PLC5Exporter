@@ -13,14 +13,14 @@ class PLC5ExcelExporter:
     def __init__(self, root):
         self.root = root
         self.root.title("PLC-5 RSP to Excel Exporter")
-        self.root.geometry("700x500")
-        
+        self.root.geometry("750x550")
+
         # Folder containing one or more RSP files
         self.rsp_folder = None
         # Optional separate output folder
         self.output_folder = None
         self.is_processing = False
-        
+
         self.setup_ui()
     
     def setup_ui(self):
@@ -49,7 +49,7 @@ class PLC5ExcelExporter:
         # Export options
         options_frame = ttk.LabelFrame(self.root, text="Export Options", padding=10)
         options_frame.pack(fill="x", padx=10, pady=5)
-        
+
         self.export_tags = tk.BooleanVar(value=True)
         self.export_timers = tk.BooleanVar(value=True)
         self.export_counters = tk.BooleanVar(value=True)
@@ -59,7 +59,11 @@ class PLC5ExcelExporter:
         self.export_io = tk.BooleanVar(value=True)
         self.export_rungs = tk.BooleanVar(value=True)
         self.export_datatable = tk.BooleanVar(value=False)
-        
+        # New export options for configuration data
+        self.export_processor = tk.BooleanVar(value=True)
+        self.export_channel_config = tk.BooleanVar(value=True)
+        self.export_io_config = tk.BooleanVar(value=True)
+
         ttk.Checkbutton(options_frame, text="Tags/Addresses", variable=self.export_tags).grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(options_frame, text="Timers", variable=self.export_timers).grid(row=0, column=1, sticky="w")
         ttk.Checkbutton(options_frame, text="Counters", variable=self.export_counters).grid(row=0, column=2, sticky="w")
@@ -69,6 +73,10 @@ class PLC5ExcelExporter:
         ttk.Checkbutton(options_frame, text="I/O Points", variable=self.export_io).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(options_frame, text="Ladder Rungs", variable=self.export_rungs).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(options_frame, text="Data Table (slow)", variable=self.export_datatable).grid(row=2, column=2, sticky="w")
+        # New checkboxes for configuration export
+        ttk.Checkbutton(options_frame, text="Processor Info", variable=self.export_processor).grid(row=3, column=0, sticky="w")
+        ttk.Checkbutton(options_frame, text="Channel Config", variable=self.export_channel_config).grid(row=3, column=1, sticky="w")
+        ttk.Checkbutton(options_frame, text="I/O Config", variable=self.export_io_config).grid(row=3, column=2, sticky="w")
         
         # Progress frame
         progress_frame = ttk.LabelFrame(self.root, text="Progress", padding=10)
@@ -179,31 +187,46 @@ class PLC5ExcelExporter:
                     abs_path = os.path.abspath(rsp_path)
                     self.log(f"Opening project: {abs_path}")
                     project = rslogix5.FileOpen(abs_path, False, False, True)
-                    
+
                     program_files = project.ProgramFiles
                     addr_sym_records = project.AddrSymRecords
                     datafiles = project.DataFiles
-                    
+
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     base_name = os.path.splitext(os.path.basename(rsp_path))[0]
-                    
+
                     # Create workbook
                     wb = Workbook()
                     wb.remove(wb.active)  # Remove default sheet
-                    
+
                     # Collect all data
                     self.log("  Analyzing ladder logic...")
                     data_collection = self.analyze_ladder_logic(program_files, addr_sym_records, datafiles)
-                    
+
                     # Add rungs if requested
                     if self.export_rungs.get():
                         self.log("  Extracting ladder rungs...")
                         data_collection['rungs'] = self.collect_rungs(program_files)
-                    
+
                     # Add datatable if requested
                     if self.export_datatable.get():
                         self.log("  Extracting data table...")
                         data_collection['datatable'] = self.collect_datatable(datafiles)
+
+                    # Add processor properties if requested
+                    if self.export_processor.get():
+                        self.log("  Extracting processor properties...")
+                        data_collection['processor'] = self.collect_processor_properties(project)
+
+                    # Add channel configuration if requested
+                    if self.export_channel_config.get():
+                        self.log("  Extracting channel configuration...")
+                        data_collection['channel_config'] = self.collect_channel_config(project)
+
+                    # Add I/O configuration if requested
+                    if self.export_io_config.get():
+                        self.log("  Extracting I/O configuration...")
+                        data_collection['io_config'] = self.collect_io_config(project)
                     
                     # Write all sheets to Excel
                     self.log("  Writing Excel file...")
@@ -526,6 +549,319 @@ class PLC5ExcelExporter:
             except Exception:
                 continue
         return data
+
+    def collect_processor_properties(self, project):
+        """Collect processor properties from the project"""
+        properties = []
+
+        # List of potential processor properties to extract
+        prop_names = [
+            ('Name', 'Name'),
+            ('ProcessorType', 'Processor Type'),
+            ('ProcessorTypeAsString', 'Processor Type String'),
+            ('NodeAddress', 'Node Address'),
+            ('StationNumber', 'Station Number'),
+            ('BaudRate', 'Baud Rate'),
+            ('ReplyTimeout', 'Reply Timeout'),
+            ('PollingMode', 'Polling Mode'),
+            ('ProgramName', 'Program Name'),
+            ('Revision', 'Revision'),
+            ('SerialNumber', 'Serial Number'),
+            ('SlotNumber', 'Slot Number'),
+            ('Description', 'Description'),
+            ('MemorySize', 'Memory Size'),
+            ('MemoryUsed', 'Memory Used'),
+            ('Password', 'Password Protected'),
+            ('OnlineEditStatus', 'Online Edit Status'),
+            ('Mode', 'Mode'),
+        ]
+
+        for prop_attr, prop_label in prop_names:
+            try:
+                value = getattr(project, prop_attr, None)
+                if value is not None:
+                    properties.append({
+                        'Property': prop_label,
+                        'Value': str(value)
+                    })
+            except Exception:
+                pass
+
+        # Try to get processor-specific object if available
+        try:
+            processor = project.Processor
+            if processor:
+                proc_props = [
+                    ('Type', 'Processor Type'),
+                    ('TypeAsString', 'Processor Type String'),
+                    ('Series', 'Series'),
+                    ('Revision', 'Processor Revision'),
+                    ('NodeAddress', 'Processor Node'),
+                    ('CommunicationsPath', 'Communications Path'),
+                ]
+                for prop_attr, prop_label in proc_props:
+                    try:
+                        value = getattr(processor, prop_attr, None)
+                        if value is not None:
+                            properties.append({
+                                'Property': prop_label,
+                                'Value': str(value)
+                            })
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return properties
+
+    def collect_channel_config(self, project):
+        """Collect channel configuration from the project"""
+        channels = []
+
+        # Try to access ChannelConfiguration or similar
+        channel_sources = [
+            'ChannelConfiguration',
+            'Channels',
+            'ChannelConfig',
+            'CommunicationChannels',
+        ]
+
+        for source_name in channel_sources:
+            try:
+                channel_obj = getattr(project, source_name, None)
+                if channel_obj:
+                    # Try to iterate if it's a collection
+                    try:
+                        count = channel_obj.Count() if callable(getattr(channel_obj, 'Count', None)) else getattr(channel_obj, 'Count', 0)
+                        for i in range(count):
+                            try:
+                                ch = channel_obj(i) if callable(channel_obj) else channel_obj.Item(i)
+                                if ch:
+                                    ch_data = self._extract_channel_properties(ch, i)
+                                    if ch_data:
+                                        channels.append(ch_data)
+                            except Exception:
+                                pass
+                    except Exception:
+                        # Single channel object
+                        ch_data = self._extract_channel_properties(channel_obj, 0)
+                        if ch_data:
+                            channels.append(ch_data)
+            except Exception:
+                pass
+
+        # Try Channel 0 (1A) and Channel 1 (1B) directly
+        for ch_num, ch_name in [(0, '1A'), (1, '1B')]:
+            try:
+                ch_attr = f'Channel{ch_name}' if ch_name else f'Channel{ch_num}'
+                channel = getattr(project, ch_attr, None)
+                if channel:
+                    ch_data = self._extract_channel_properties(channel, ch_num, ch_name)
+                    if ch_data:
+                        channels.append(ch_data)
+            except Exception:
+                pass
+
+        # Try to get DH+ configuration
+        try:
+            dhplus = getattr(project, 'DHPlus', None) or getattr(project, 'DataHighwayPlus', None)
+            if dhplus:
+                dh_data = {
+                    'Channel': 'DH+',
+                    'Type': 'Data Highway Plus',
+                }
+                for prop in ['NodeAddress', 'BaudRate', 'StationNumber', 'NetworkAddress']:
+                    try:
+                        val = getattr(dhplus, prop, None)
+                        if val is not None:
+                            dh_data[prop] = str(val)
+                    except Exception:
+                        pass
+                if len(dh_data) > 2:
+                    channels.append(dh_data)
+        except Exception:
+            pass
+
+        # Try to get Remote I/O configuration
+        try:
+            rio = getattr(project, 'RemoteIO', None) or getattr(project, 'RIO', None)
+            if rio:
+                rio_data = {
+                    'Channel': 'RIO',
+                    'Type': 'Remote I/O',
+                }
+                for prop in ['ScannerMode', 'RackSize', 'StartingGroup', 'LastGroup']:
+                    try:
+                        val = getattr(rio, prop, None)
+                        if val is not None:
+                            rio_data[prop] = str(val)
+                    except Exception:
+                        pass
+                if len(rio_data) > 2:
+                    channels.append(rio_data)
+        except Exception:
+            pass
+
+        return channels
+
+    def _extract_channel_properties(self, channel, index, name=None):
+        """Extract properties from a channel object"""
+        ch_data = {
+            'Channel': name if name else str(index),
+        }
+
+        props = [
+            'Type', 'TypeAsString', 'BaudRate', 'NodeAddress',
+            'StationNumber', 'NetworkType', 'Protocol',
+            'ScannerMode', 'ComPort', 'DriverType',
+            'Enabled', 'Description', 'Address',
+        ]
+
+        for prop in props:
+            try:
+                val = getattr(channel, prop, None)
+                if val is not None:
+                    ch_data[prop] = str(val)
+            except Exception:
+                pass
+
+        return ch_data if len(ch_data) > 1 else None
+
+    def collect_io_config(self, project):
+        """Collect I/O configuration from the project"""
+        io_configs = []
+
+        # Try various I/O configuration sources
+        io_sources = [
+            ('IOConfiguration', 'I/O Configuration'),
+            ('IORack', 'I/O Rack'),
+            ('IOTree', 'I/O Tree'),
+            ('Chassis', 'Chassis'),
+            ('Racks', 'Racks'),
+        ]
+
+        for source_attr, source_name in io_sources:
+            try:
+                io_obj = getattr(project, source_attr, None)
+                if io_obj:
+                    self._extract_io_from_object(io_obj, io_configs, source_name)
+            except Exception:
+                pass
+
+        # Try to enumerate I/O racks directly
+        for rack_num in range(8):  # PLC-5 supports up to 8 racks
+            try:
+                rack_attr = f'Rack{rack_num}'
+                rack = getattr(project, rack_attr, None)
+                if rack:
+                    self._extract_rack_config(rack, rack_num, io_configs)
+            except Exception:
+                pass
+
+        # Try to get I/O from datafiles (Status file S:)
+        try:
+            datafiles = project.DataFiles
+            # Read I/O rack size from Status file
+            for slot in range(16):  # Up to 16 slots per rack
+                for rack in range(8):
+                    try:
+                        # Input addresses
+                        i_addr = f"I:{rack * 16 + slot}"
+                        o_addr = f"O:{rack * 16 + slot}"
+
+                        # Check if these addresses exist
+                        try:
+                            i_val = datafiles.GetDataValue(i_addr)
+                            io_configs.append({
+                                'Rack': rack,
+                                'Slot': slot,
+                                'Type': 'Input',
+                                'Address': i_addr,
+                                'Value': str(i_val) if i_val is not None else ''
+                            })
+                        except Exception:
+                            pass
+
+                        try:
+                            o_val = datafiles.GetDataValue(o_addr)
+                            io_configs.append({
+                                'Rack': rack,
+                                'Slot': slot,
+                                'Type': 'Output',
+                                'Address': o_addr,
+                                'Value': str(o_val) if o_val is not None else ''
+                            })
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return io_configs
+
+    def _extract_io_from_object(self, io_obj, io_configs, source_name):
+        """Extract I/O configuration from a COM object"""
+        try:
+            # Try as collection
+            count = io_obj.Count() if callable(getattr(io_obj, 'Count', None)) else getattr(io_obj, 'Count', 0)
+            for i in range(count):
+                try:
+                    item = io_obj(i) if callable(io_obj) else io_obj.Item(i)
+                    if item:
+                        io_data = {'Source': source_name, 'Index': i}
+                        for prop in ['Type', 'TypeAsString', 'Rack', 'Slot', 'Group',
+                                    'Address', 'Description', 'Size', 'ModuleType']:
+                            try:
+                                val = getattr(item, prop, None)
+                                if val is not None:
+                                    io_data[prop] = str(val)
+                            except Exception:
+                                pass
+                        if len(io_data) > 2:
+                            io_configs.append(io_data)
+                except Exception:
+                    pass
+        except Exception:
+            # Try as single object with properties
+            io_data = {'Source': source_name}
+            for prop in ['Type', 'Rack', 'Slot', 'Group', 'Address', 'Description', 'Size']:
+                try:
+                    val = getattr(io_obj, prop, None)
+                    if val is not None:
+                        io_data[prop] = str(val)
+                except Exception:
+                    pass
+            if len(io_data) > 1:
+                io_configs.append(io_data)
+
+    def _extract_rack_config(self, rack, rack_num, io_configs):
+        """Extract configuration from a rack object"""
+        try:
+            # Try to get slots
+            slot_count = rack.Count() if callable(getattr(rack, 'Count', None)) else getattr(rack, 'Count', 16)
+            for slot_num in range(slot_count):
+                try:
+                    slot = rack(slot_num) if callable(rack) else rack.Item(slot_num)
+                    if slot:
+                        slot_data = {
+                            'Rack': rack_num,
+                            'Slot': slot_num,
+                        }
+                        for prop in ['Type', 'TypeAsString', 'ModuleType', 'Description',
+                                    'InputSize', 'OutputSize', 'Address']:
+                            try:
+                                val = getattr(slot, prop, None)
+                                if val is not None:
+                                    slot_data[prop] = str(val)
+                            except Exception:
+                                pass
+                        if len(slot_data) > 2:
+                            io_configs.append(slot_data)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     
     def write_excel_workbook(self, wb, data):
         """Write all data to Excel sheets"""
@@ -588,12 +924,42 @@ class PLC5ExcelExporter:
                            ['File_Name', 'File_Number', 'Rung_Number', 'Rung_ASCII'],
                            data['rungs'])
             self.log(f"  Wrote {len(data['rungs'])} rungs")
-        
+
         if 'datatable' in data and data['datatable']:
             self.write_sheet(wb, 'DataTable',
                            ['FileType', 'FileNumber', 'Element', 'Address', 'Value'],
                            data['datatable'])
             self.log(f"  Wrote {len(data['datatable'])} datatable values")
+
+        # Write processor properties
+        if 'processor' in data and data['processor']:
+            self.write_sheet(wb, 'Processor',
+                           ['Property', 'Value'],
+                           data['processor'])
+            self.log(f"  Wrote {len(data['processor'])} processor properties")
+
+        # Write channel configuration
+        if 'channel_config' in data and data['channel_config']:
+            # Get all unique keys from channel data
+            all_keys = set()
+            for ch in data['channel_config']:
+                all_keys.update(ch.keys())
+            headers = ['Channel'] + sorted([k for k in all_keys if k != 'Channel'])
+            self.write_sheet(wb, 'ChannelConfig', headers, data['channel_config'])
+            self.log(f"  Wrote {len(data['channel_config'])} channel configurations")
+
+        # Write I/O configuration
+        if 'io_config' in data and data['io_config']:
+            # Get all unique keys from I/O data
+            all_keys = set()
+            for io in data['io_config']:
+                all_keys.update(io.keys())
+            # Preferred order for I/O config headers
+            preferred_order = ['Rack', 'Slot', 'Type', 'Address', 'Value', 'ModuleType', 'Description']
+            headers = [k for k in preferred_order if k in all_keys]
+            headers += sorted([k for k in all_keys if k not in preferred_order])
+            self.write_sheet(wb, 'IOConfig', headers, data['io_config'])
+            self.log(f"  Wrote {len(data['io_config'])} I/O configuration entries")
     
     def write_sheet(self, wb, sheet_name, headers, rows):
         """Write data to a sheet efficiently, expanding Description into Desc1..Desc5 when present"""
