@@ -551,10 +551,11 @@ class PLC5ExcelExporter:
         return data
 
     def collect_processor_properties(self, project):
-        """Collect processor properties from the project"""
+        """Collect processor properties from the project and Status file"""
         properties = []
+        datafiles = project.DataFiles
 
-        # List of potential processor properties to extract
+        # List of potential processor properties to extract from project object
         prop_names = [
             ('Name', 'Name'),
             ('ProcessorType', 'Processor Type'),
@@ -612,97 +613,269 @@ class PLC5ExcelExporter:
         except Exception:
             pass
 
+        # Read Status File (S:) words for processor info
+        # PLC-5 Status file contains important processor configuration
+        status_words = {
+            0: 'Arithmetic Flags',
+            1: 'Processor Status',
+            2: 'Channel 1A DH+ Node Address (octal)',
+            3: 'Active Nodes (0-17 octal)',
+            4: 'Active Nodes (20-37 octal)',
+            5: 'Active Nodes (40-57 octal)',
+            6: 'Active Nodes (60-77 octal)',
+            7: 'Global Status Bits',
+            8: 'Minor Fault Bits',
+            9: 'Major Fault Type',
+            10: 'Major Fault Code',
+            11: 'Fault Word 11',
+            12: 'Fault Word 12',
+            13: 'First Program File',
+            14: 'Last Program File',
+            15: 'User Fault Routine',
+            16: 'Indexed Address',
+            17: 'Indexed Address',
+            18: 'Single Step Fault',
+            19: 'Fault File',
+            20: 'Fault Rung',
+            21: 'I/O Slot Enables',
+            22: 'Max Scan Time',
+            23: 'Avg Scan Time',
+            24: 'Last Scan Time',
+            25: 'Watchdog Setpoint',
+            26: 'Program Block',
+            27: 'Global Status Ext',
+            28: 'False Bits Word',
+            29: 'Fault Routine File',
+            30: 'STI Setpoint',
+            31: 'STI File Number',
+            32: 'Global Status Ext 2',
+            33: 'Global Status Ext 3',
+            34: 'Global Status Ext 4',
+            35: 'Global Status Ext 5',
+            36: 'I/O Interrupt Pending',
+            37: 'I/O Interrupt Enabled',
+            40: 'PII File Number',
+            41: 'PII Slot Number',
+            42: 'PII Stack Top',
+            43: 'PII Stack Max',
+            53: 'Year',
+            54: 'Month',
+            55: 'Day',
+            56: 'Hour',
+            57: 'Minute',
+            58: 'Second',
+            64: 'BT Blocks Ch 1A/1B',
+            65: 'Channel 1A Diagnostic File',
+            66: 'Channel 1B Diagnostic File',
+        }
+
+        for word_num, word_desc in status_words.items():
+            try:
+                addr = f"S:{word_num}"
+                value = datafiles.GetDataValue(addr)
+                if value is not None:
+                    # Format octal addresses specially
+                    if 'octal' in word_desc.lower():
+                        properties.append({
+                            'Property': f'S:{word_num} - {word_desc}',
+                            'Value': f'{value} (octal: {oct(value)})'
+                        })
+                    else:
+                        properties.append({
+                            'Property': f'S:{word_num} - {word_desc}',
+                            'Value': str(value)
+                        })
+            except Exception:
+                pass
+
         return properties
 
     def collect_channel_config(self, project):
-        """Collect channel configuration from the project"""
+        """Collect channel configuration from Status file and Diagnostic files"""
         channels = []
+        datafiles = project.DataFiles
 
+        # Channel configuration is stored in diagnostic files
+        # Default diagnostic file numbers from your screenshots:
+        # Channel 0 (Serial): Diagnostic File 31
+        # Channel 1A (DH+): Diagnostic File 32
+        # Channel 1B: Could be 33
+        # Channel 2 (Ethernet): Diagnostic File 34
+        # Channel 3A: Could be 35
+
+        channel_info = [
+            {'name': 'Channel 0', 'diag_file': 31, 'type': 'Serial Port'},
+            {'name': 'Channel 1A', 'diag_file': 32, 'type': 'DH+/Remote I/O'},
+            {'name': 'Channel 1B', 'diag_file': 33, 'type': 'DH+/Remote I/O'},
+            {'name': 'Channel 2', 'diag_file': 34, 'type': 'Ethernet'},
+            {'name': 'Channel 3A', 'diag_file': 35, 'type': 'ControlNet'},
+        ]
+
+        # Try to read diagnostic file numbers from Status file
+        # S:65 = Channel 1A Diagnostic File, S:66 = Channel 1B Diagnostic File
+        try:
+            s65 = datafiles.GetDataValue("S:65")
+            if s65 and s65 > 0:
+                channel_info[1]['diag_file'] = int(s65)
+        except Exception:
+            pass
+
+        try:
+            s66 = datafiles.GetDataValue("S:66")
+            if s66 and s66 > 0:
+                channel_info[2]['diag_file'] = int(s66)
+        except Exception:
+            pass
+
+        # Get Channel 1A DH+ node address from S:2
+        ch1a_node = None
+        try:
+            s2 = datafiles.GetDataValue("S:2")
+            if s2 is not None:
+                ch1a_node = s2
+        except Exception:
+            pass
+
+        for ch_info in channel_info:
+            diag_file = ch_info['diag_file']
+            ch_data = {
+                'Channel': ch_info['name'],
+                'Type': ch_info['type'],
+                'DiagnosticFile': str(diag_file),
+            }
+
+            # Add DH+ node address for Channel 1A
+            if ch_info['name'] == 'Channel 1A' and ch1a_node is not None:
+                ch_data['NodeAddress'] = f'{ch1a_node} (octal: {oct(ch1a_node)})'
+
+            # Read diagnostic file contents (44 words)
+            # The structure varies by channel type, but we'll read all available words
+            diag_words = {}
+            for word in range(44):
+                try:
+                    addr = f"N{diag_file}:{word}"
+                    value = datafiles.GetDataValue(addr)
+                    if value is not None:
+                        diag_words[word] = value
+                except Exception:
+                    pass
+
+            if diag_words:
+                ch_data['DiagWordsFound'] = str(len(diag_words))
+
+                # Parse known diagnostic word meanings based on channel type
+                if ch_info['type'] == 'Serial Port':
+                    # Channel 0 Serial Port diagnostic layout
+                    self._parse_serial_diag(ch_data, diag_words)
+                elif ch_info['type'] == 'DH+/Remote I/O':
+                    # Channel 1A/1B DH+ or Remote I/O diagnostic layout
+                    self._parse_dhplus_diag(ch_data, diag_words)
+                elif ch_info['type'] == 'Ethernet':
+                    # Channel 2 Ethernet diagnostic layout
+                    self._parse_ethernet_diag(ch_data, diag_words)
+
+                # Add raw diagnostic words for reference
+                raw_data = '; '.join([f'W{k}={v}' for k, v in sorted(diag_words.items())[:20]])
+                ch_data['RawDiagnostics'] = raw_data
+
+            # Only add channel if we found diagnostic data
+            if len(diag_words) > 0 or ch_info['name'] == 'Channel 1A':
+                channels.append(ch_data)
+
+        # Try to read additional channel config from COM objects
+        self._try_com_channel_objects(project, channels)
+
+        return channels
+
+    def _parse_serial_diag(self, ch_data, diag_words):
+        """Parse Serial Port (Channel 0) diagnostic words"""
+        # Based on PLC-5 documentation, diagnostic file layout for serial
+        if 0 in diag_words:
+            ch_data['Status'] = str(diag_words[0])
+        if 1 in diag_words:
+            ch_data['ErrorCount'] = str(diag_words[1])
+        if 2 in diag_words:
+            ch_data['MessagesSent'] = str(diag_words[2])
+        if 3 in diag_words:
+            ch_data['MessagesReceived'] = str(diag_words[3])
+
+    def _parse_dhplus_diag(self, ch_data, diag_words):
+        """Parse DH+/Remote I/O (Channel 1A/1B) diagnostic words"""
+        # DH+ diagnostic file layout (44 words)
+        if 0 in diag_words:
+            ch_data['Status'] = str(diag_words[0])
+        if 1 in diag_words:
+            ch_data['TokenRotation'] = str(diag_words[1])
+        if 2 in diag_words:
+            ch_data['GlobalStatusBits'] = str(diag_words[2])
+        if 3 in diag_words:
+            ch_data['MsgSent'] = str(diag_words[3])
+        if 4 in diag_words:
+            ch_data['MsgReceived'] = str(diag_words[4])
+        if 5 in diag_words:
+            ch_data['TokenPasses'] = str(diag_words[5])
+        if 6 in diag_words:
+            ch_data['Collisions'] = str(diag_words[6])
+        if 7 in diag_words:
+            ch_data['ErrorsRecovered'] = str(diag_words[7])
+        if 8 in diag_words:
+            ch_data['ErrorsUnrecovered'] = str(diag_words[8])
+        # Words 9-16 typically contain active node table info
+        # Words 17+ contain additional statistics
+
+    def _parse_ethernet_diag(self, ch_data, diag_words):
+        """Parse Ethernet (Channel 2) diagnostic words"""
+        # Ethernet diagnostic file layout
+        if 0 in diag_words:
+            ch_data['Status'] = str(diag_words[0])
+        if 1 in diag_words:
+            ch_data['TCPConnections'] = str(diag_words[1])
+        if 2 in diag_words:
+            ch_data['UDPConnections'] = str(diag_words[2])
+        if 3 in diag_words:
+            ch_data['PacketsSent'] = str(diag_words[3])
+        if 4 in diag_words:
+            ch_data['PacketsReceived'] = str(diag_words[4])
+        # IP address may be stored in words 5-8 (4 bytes each or combined)
+        # Try to extract IP address if available
+        try:
+            if all(w in diag_words for w in [5, 6, 7, 8]):
+                # Each word might be a byte of the IP
+                ip_parts = [diag_words.get(i, 0) & 0xFF for i in [5, 6, 7, 8]]
+                if all(0 <= p <= 255 for p in ip_parts):
+                    ch_data['IPAddress'] = '.'.join(map(str, ip_parts))
+        except Exception:
+            pass
+
+    def _try_com_channel_objects(self, project, channels):
+        """Try to access channel configuration via COM objects"""
         # Try to access ChannelConfiguration or similar
         channel_sources = [
             'ChannelConfiguration',
             'Channels',
             'ChannelConfig',
             'CommunicationChannels',
+            'Channel0',
+            'Channel1A',
+            'Channel1B',
+            'Channel2',
+            'Channel3A',
         ]
 
         for source_name in channel_sources:
             try:
                 channel_obj = getattr(project, source_name, None)
                 if channel_obj:
-                    # Try to iterate if it's a collection
-                    try:
-                        count = channel_obj.Count() if callable(getattr(channel_obj, 'Count', None)) else getattr(channel_obj, 'Count', 0)
-                        for i in range(count):
-                            try:
-                                ch = channel_obj(i) if callable(channel_obj) else channel_obj.Item(i)
-                                if ch:
-                                    ch_data = self._extract_channel_properties(ch, i)
-                                    if ch_data:
-                                        channels.append(ch_data)
-                            except Exception:
-                                pass
-                    except Exception:
-                        # Single channel object
-                        ch_data = self._extract_channel_properties(channel_obj, 0)
-                        if ch_data:
+                    ch_data = self._extract_channel_properties(channel_obj, 0, source_name)
+                    if ch_data and len(ch_data) > 1:
+                        # Check if we already have this channel
+                        existing = [c for c in channels if c.get('Channel') == source_name]
+                        if existing:
+                            existing[0].update(ch_data)
+                        else:
                             channels.append(ch_data)
             except Exception:
                 pass
-
-        # Try Channel 0 (1A) and Channel 1 (1B) directly
-        for ch_num, ch_name in [(0, '1A'), (1, '1B')]:
-            try:
-                ch_attr = f'Channel{ch_name}' if ch_name else f'Channel{ch_num}'
-                channel = getattr(project, ch_attr, None)
-                if channel:
-                    ch_data = self._extract_channel_properties(channel, ch_num, ch_name)
-                    if ch_data:
-                        channels.append(ch_data)
-            except Exception:
-                pass
-
-        # Try to get DH+ configuration
-        try:
-            dhplus = getattr(project, 'DHPlus', None) or getattr(project, 'DataHighwayPlus', None)
-            if dhplus:
-                dh_data = {
-                    'Channel': 'DH+',
-                    'Type': 'Data Highway Plus',
-                }
-                for prop in ['NodeAddress', 'BaudRate', 'StationNumber', 'NetworkAddress']:
-                    try:
-                        val = getattr(dhplus, prop, None)
-                        if val is not None:
-                            dh_data[prop] = str(val)
-                    except Exception:
-                        pass
-                if len(dh_data) > 2:
-                    channels.append(dh_data)
-        except Exception:
-            pass
-
-        # Try to get Remote I/O configuration
-        try:
-            rio = getattr(project, 'RemoteIO', None) or getattr(project, 'RIO', None)
-            if rio:
-                rio_data = {
-                    'Channel': 'RIO',
-                    'Type': 'Remote I/O',
-                }
-                for prop in ['ScannerMode', 'RackSize', 'StartingGroup', 'LastGroup']:
-                    try:
-                        val = getattr(rio, prop, None)
-                        if val is not None:
-                            rio_data[prop] = str(val)
-                    except Exception:
-                        pass
-                if len(rio_data) > 2:
-                    channels.append(rio_data)
-        except Exception:
-            pass
-
-        return channels
 
     def _extract_channel_properties(self, channel, index, name=None):
         """Extract properties from a channel object"""
